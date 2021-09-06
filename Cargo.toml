@@ -1,0 +1,20 @@
+[package]
+name = "rucli"
+version = "0.1.0"
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+# 解析命令行输入参数
+structopt = "0.3.23"
+# 任务处理进度显示
+indicatif = "0.16.2"
+# 调用程序执行
+execute = "0.2.9"
+#日志
+log = "0.4.14"
+chrono = "0.4"
+
+#正则
+regex = "1.5.4"

@@ -1,0 +1,213 @@
+//告诉编译器在编译此模块时以Android为目标 [cfg]是一个特殊属性，可让您根据传递给编译器的标志来编译代码
+#![cfg(target_os = "android")]
+
+extern crate jni;
+extern crate log;
+extern crate imonkey_biz;
+
+use imonkey_biz::{EventType, EventData, static_str};
+
+use jni::{JNIEnv, JavaVM, errors::Error, sys::jint, objects::{JString, JValue, JObject, JClass, GlobalRef}, AttachGuard};
+use std::{os::raw::c_void, sync::Mutex, collections::HashMap};
+use lazy_static::lazy_static;
+use log::{info, error};
+use std::ops::Deref;
+use jni::sys::jlong;
+
+lazy_static! {
+    // jvm实例
+    static ref JVM_GLOBAL: Mutex<Option<JavaVM>> = Mutex::new(None);
+    // 全局回调
+    static ref JNI_CALLBACK: Mutex<Option<GlobalRef>> = Mutex::new(None);
+}
+
+// java class 回调类
+const JAVA_CLASS_NAME: &'static str = "com/aisdk/assess/hotWheels/HotWheels";
+
+
+// 由于我们将从非Rust代码调用此库，因此实际上将通过C桥对其进行调用。
+// #[no_mangle]告诉编译器不要像通常默认情况那样处理函数名，以确保我们的函数名被导出
+#[no_mangle]
+// 告诉编译器不要警告我们是否未使用snake_case变量或函数名。
+// Rust编译器非常严格-这是使Rust出色的原因之一-并强制使用了全文snake_case。
+// 但是，我们使用Java编码约定在Android项目中定义了类名和本机方法camelCase
+#[allow(non_snake_case)]
+unsafe fn JNI_OnLoad(jvm: JavaVM, _reserved: *mut c_void) -> jint {
+    let env = jvm.get_env().unwrap();
+    let result = env.get_version().unwrap();
+    let version: jint = result.into();
+
+    let mut globalJvm = JVM_GLOBAL.lock().unwrap();
+    *globalJvm = Some(jvm);
+
+    // 注册全局log
+    imonkey_biz::setup_logger(static_str!(format!("rust_jni:[{}]", version)), log_call);
+    // 注册全局事件
+    imonkey_biz::setup_event_call(event_call);
+
+    version
+}
+
+#[no_mangle]
+#[allow(non_snake_case)]
+pub unsafe extern "system" fn Java_com_aisdk_assess_hotWheels_HotWheels_init(env: JNIEnv, _j_class: JClass, call: JObject) -> jint {
+    imonkey_biz::init(match_rule);
+    // 创建一个全局引用,
+    match env.new_global_ref(call) {
+        Ok(global) => {
+            // 添加到全局缓存
+            let mut ptr_fn = JNI_CALLBACK.lock().unwrap();
+            *ptr_fn = Some(global);
+            // 初始化规则回调
+            1
+        }
+        Err(_) => {
+            0
+        }
+    }
+}
+
+#[no_mangle]
+#[allow(non_snake_case)]
+pub unsafe extern "system" fn Java_com_aisdk_assess_hotWheels_HotWheels_setCacheFolder(env: JNIEnv, _j_class: JClass, folder: JString) -> jint {
+    imonkey_biz::setup_cache(&to_string(env, folder)) as i32
+}
+
+#[no_mangle]
+#[allow(non_snake_case)]
+pub unsafe extern "system" fn Java_com_aisdk_assess_hotWheels_HotWheels_setRulePath(env: JNIEnv, _j_class: JClass, rulePath: JString) -> jint {
+    imonkey_biz::read_file(&to_string(env, rulePath)) as i32
+}
+
+#[no_mangle]
+#[allow(non_snake_case)]
+pub unsafe extern "system" fn Java_com_aisdk_assess_hotWheels_HotWheels_setRuleJson(env: JNIEnv, _j_class: JClass, json: JString) -> jint {
+    imonkey_biz::read_json(&to_string(env, json)) as i32
+}
+
+#[no_mangle]
+#[allow(non_snake_case)]
+pub unsafe extern "system" fn Java_com_aisdk_assess_hotWheels_HotWheels_setDbConfig(env: JNIEnv, _j_class: JClass, config: JObject) -> jint {
+    match to_map(env, config) {
+        Ok(map) => {
+            imonkey_biz::db_config(map) as i32
+        }
+        Err(e) => {
+            error!("setDbConfig 数据异常: {}", e);
+            0
+        }
+    }
+}
+
+#[no_mangle]
+#[allow(non_snake_case)]
+pub unsafe extern "system" fn Java_com_aisdk_assess_hotWheels_HotWheels_trigger(env: JNIEnv, _j_class: JClass, tag: JString) -> jint {
+    imonkey_biz::trigger(to_op_string(env, tag)) as i32
+}
+
+#[no_mangle]
+#[allow(non_snake_case)]
+pub unsafe extern "system" fn Java_com_aisdk_assess_hotWheels_HotWheels_receiverTouchError(_env: JNIEnv, _j_class: JClass, task_id: jlong, rule_id: jint) -> jint {
+    imonkey_biz::receiver_rule_err(task_id, rule_id as usize) as i32
+}
+
+#[no_mangle]
+#[allow(non_snake_case)]
+pub unsafe extern "system" fn Java_com_aisdk_assess_hotWheels_HotWheels_free(_env: JNIEnv, _j_class: JClass) {
+    imonkey_biz::free();
+}
+
+///自定义全局日志配置回调函数
+fn log_call(time: String, level: usize, tag: String, msg: String) {
+    unsafe {
+        call_method(
+            "rust_log",
+            "(Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;)V",
+            move |env| {
+                vec![env.new_string(time).unwrap().into(),
+                     JValue::from(jint::from(level as i32)),
+                     env.new_string(tag).unwrap().into(),
+                     env.new_string(msg).unwrap().into()]
+            });
+    }
+}
+
+///自定义全局事件回调函数
+fn event_call(ty: EventType, body: EventData) {
+    unsafe {
+        call_method(
+            "rust_event",
+            "(ILjava/lang/String;)V",
+            |env| {
+                vec![JValue::from(jint::from(ty.to_size() as i32)),
+                     env.new_string(body.to_string()).unwrap().into()]
+            });
+    }
+}
+
+///自定义全局规则配置
+fn match_rule(task_id: i64, rule_id: usize, version: &str, then: &str) {
+    unsafe {
+        call_method(
+            "rust_rule",
+            "(JILjava/lang/String;Ljava/lang/String;)V",
+            |env| {
+                vec![JValue::from(jlong::from(task_id)),
+                     JValue::from(jint::from(rule_id as i32)),
+                     env.new_string(version).unwrap().into(),
+                     env.new_string(then).unwrap().into()]
+            });
+    }
+}
+
+
+/// 调用本地非静态方法
+unsafe fn call_method<O: FnOnce(JNIEnv) -> Vec<JValue>>(method_name: &str, sig: &str, op: O) {
+    JVM_GLOBAL.lock().map(|guard| {
+        (*guard).as_ref().map(|jvm| {
+            jvm.attach_current_thread_permanently().map(|env| {
+                JNI_CALLBACK.lock().map(|callback| {
+                    if (*callback).is_none() {
+                        return;
+                    }
+                    (*callback).as_ref().map(|call| {
+                        env.call_method(call.as_obj(), method_name, sig, &op(env));
+                    });
+                });
+            });
+        });
+    });
+}
+
+fn to_string(_env: JNIEnv, j_string: JString) -> String {
+    match _env.get_string(j_string) {
+        Ok(jstr) => { String::from(jstr) }
+        Err(e) => {
+            info!("数据错误 : {}", e);
+            "".to_string()
+        }
+    }
+}
+
+fn to_op_string(_env: JNIEnv, j_string: JString) -> Option<String> {
+    match _env.get_string(j_string) {
+        Ok(j_str) => { Some(String::from(j_str)) }
+        Err(e) => {
+            info!("数据错误 : {}", e);
+            None
+        }
+    }
+}
+
+fn to_map(env: JNIEnv, map: JObject) -> Result<HashMap<String, String>, Error> {
+    info!("map解析");
+    let mut hash = HashMap::new();
+    env.get_map(map)?
+        .iter()?
+        .for_each(|(k, v)| {
+            let key = to_string(env, JString::from(k));
+            let value = to_string(env, JString::from(v));
+            hash.insert(key, value);
+        });
+    Ok(hash)
+}
