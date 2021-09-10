@@ -1,4 +1,4 @@
-use crate::cli_error::CliError;
+use crate::util::CliError;
 use crate::cli::cli_param::CliParam;
 
 mod ability_length;

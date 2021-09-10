@@ -1,6 +1,5 @@
-use crate::cli_error::CliError;
+use crate::util::{CliError, file::read_file};
 use crate::ability::Ability;
-use crate::file::read_file;
 use log::info;
 
 pub struct CAT {}

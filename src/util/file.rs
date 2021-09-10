@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::io::Read;
-use crate::cli_error::CliError;
+use crate::util::CliError;
 use std::fs::{read_to_string, create_dir_all, write};
 
 pub fn read_file(path: &str) -> Result<String, CliError> {

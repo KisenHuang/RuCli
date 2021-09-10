@@ -1,7 +1,7 @@
 use std::fmt::{Display, Formatter};
 //命令参数获取工具
 use structopt::StructOpt;
-use crate::cli_error::CliError;
+use crate::util::CliError;
 
 ///存储参数
 // #[derive(Debug, StructOpt, Clone)]

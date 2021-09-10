@@ -1,7 +1,7 @@
 use std::thread;
 use std::time::Duration;
 
-use crate::cli_error::CliError;
+use crate::util::CliError;
 use crate::ability;
 use crate::cli::cli_param::CliParam;
 

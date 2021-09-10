@@ -1,19 +1,14 @@
+mod util;
+mod cli;
+mod ability;
+
 use std::thread;
 use std::time::Duration;
 
 use indicatif;
 
 use cli::cli_deal::Deal;
-use crate::cli_error::CliError;
-
-mod cli;
-mod shell;
-mod cli_error;
-mod ability;
-mod logger;
-
-mod file;
-
+use util::{CliError, logger};
 use log::{info, error};
 
 fn main() {
